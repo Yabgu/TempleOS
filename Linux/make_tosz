@@ -1,9 +1,19 @@
 #!/bin/bash
 
+set -ex
+
 #Make TOSZ
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
+OUTPUT_DIR="$DIR/build"
+echo "Checking if output directory exist"
 
-echo Make TOSZ
-cc TOSZ.CPP -o TOSZ
-chmod 777 TOSZ
+if [ ! -d "$OUTPUT_DIR" ]; then
+  echo "Creating output dir"
+  mkdir "$DIR/build" || die "Cannot create output dir"
+fi
 
-
+echo "Make TOSZ"
+pushd "$OUTPUT_DIR" || die "Cannot enter into output dir"
+cmake "$DIR"
+cmake --build .
+popd

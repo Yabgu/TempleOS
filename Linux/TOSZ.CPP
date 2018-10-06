@@ -1,50 +1,33 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <memory.h>
-#include <math.h>
-
+#include "Arc.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
+#include <cstring>
 #pragma pack(1)
 
-#define TRUE 1
-#define FALSE 0
-#define BYTE_MAX 0xFF
-#define CHAR_MIN (-0x80)
-#define CHAR_MAX 0x7F
-#define SHORT_MIN (-0x8000)
-#define SHORT_MAX 0x7FFF
-#define INT_MIN (-0x80000000)
-#define INT_MAX 0x7FFFFFFF
-#define DWORD_MIN 0
-#define DWORD_MAX 0xFFFFFFFF
 #define CDATE_FREQ 49710 // Hz
-
-typedef unsigned char BYTE;
-typedef unsigned short WORD;
-typedef unsigned int DWORD;
-typedef unsigned char BOOL;
 
 class CDate
 {
 public:
-  DWORD time;
+  uint32_t time;
   int date;
 };
 
-WORD EndianWORD(WORD d)
+uint16_t EndianWORD(uint16_t d)
 {
   return ((d & 255) << 8) | ((d >> 8) & 255);
 }
 
-DWORD EndianDWORD(DWORD d)
+uint32_t EndianDWORD(uint32_t d)
 {
   return ((d & 255) << 24) | (((d >> 8) & 255) << 16) |
          (((d >> 16) & 255) << 8) | ((d >> 24) & 255);
 }
 
-DWORD StrOcc(char *src, char ch)
+uint32_t StrOcc(char *src, char ch)
 { //Count occurrences of a char.
-  DWORD i = 0;
+  uint32_t i = 0;
   if (!src)
     return 0;
   while (*src)
@@ -53,9 +36,9 @@ DWORD StrOcc(char *src, char ch)
   return i;
 }
 
-void *CAlloc(DWORD size)
+void *CAlloc(uint32_t size)
 {
-  BYTE *res = (BYTE *)malloc(size);
+  uint8_t *res = (uint8_t *)malloc(size);
   memset(res, 0, size);
   return res;
 }
@@ -75,256 +58,27 @@ int FSize(FILE *f)
   return res;
 }
 
-#define ARC_MAX_BITS 12
 
-#define CT_NONE 1
-#define CT_7_BIT 2
-#define CT_8_BIT 3
 
-class CArcEntry
+bool Cvt(char *in_name, char *out_name, bool cvt_ascii)
 {
-public:
-  CArcEntry *next;
-  WORD basecode;
-  BYTE ch, pad;
-};
-
-class CArcCtrl //control structure
-{
-public:
-  DWORD src_pos, src_size,
-      dst_pos, dst_size;
-  BYTE *src_buf, *dst_buf;
-  DWORD min_bits, min_table_entry;
-  CArcEntry *cur_entry, *next_entry;
-  DWORD cur_bits_in_use, next_bits_in_use;
-  BYTE *stk_ptr, *stk_base;
-  DWORD free_idx, free_limit,
-      saved_basecode,
-      entry_used,
-      last_ch;
-  CArcEntry compress[1 << ARC_MAX_BITS],
-      *hash[1 << ARC_MAX_BITS];
-};
-
-class CArcCompress
-{
-public:
-  DWORD compressed_size, compressed_size_hi,
-      expanded_size, expanded_size_hi;
-  BYTE compression_type;
-  BYTE body[1];
-};
-
-int Bt(int bit_num, BYTE *bit_field)
-{
-  bit_field += bit_num >> 3;
-  bit_num &= 7;
-  return (*bit_field & (1 << bit_num)) ? 1 : 0;
-}
-
-int Bts(int bit_num, BYTE *bit_field)
-{
-  int res;
-  bit_field += bit_num >> 3;
-  bit_num &= 7;
-  res = *bit_field & (1 << bit_num);
-  *bit_field |= (1 << bit_num);
-  return (res) ? 1 : 0;
-}
-
-DWORD BFieldExtDWORD(BYTE *src, DWORD pos, DWORD bits)
-{
-  DWORD i, res = 0;
-  for (i = 0; i < bits; i++)
-    if (Bt(pos + i, src))
-      Bts(i, (BYTE *)&res);
-  return res;
-}
-
-void ArcEntryGet(CArcCtrl *c)
-{
-  DWORD i;
-  CArcEntry *tmp, *tmp1;
-
-  if (c->entry_used)
-  {
-    i = c->free_idx;
-
-    c->entry_used = FALSE;
-    c->cur_entry = c->next_entry;
-    c->cur_bits_in_use = c->next_bits_in_use;
-    if (c->next_bits_in_use < ARC_MAX_BITS)
-    {
-      c->next_entry = &c->compress[i++];
-      if (i == c->free_limit)
-      {
-        c->next_bits_in_use++;
-        c->free_limit = 1 << c->next_bits_in_use;
-      }
-    }
-    else
-    {
-      do
-        if (++i == c->free_limit)
-          i = c->min_table_entry;
-      while (c->hash[i]);
-      tmp = &c->compress[i];
-      c->next_entry = tmp;
-      tmp1 = (CArcEntry *)&c->hash[tmp->basecode];
-      while (tmp1 && tmp1->next != tmp)
-        tmp1 = tmp1->next;
-      if (tmp1)
-        tmp1->next = tmp->next;
-    }
-    c->free_idx = i;
-  }
-}
-
-void ArcExpandBuf(CArcCtrl *c)
-{
-  BYTE *dst_ptr, *dst_limit;
-  DWORD basecode, lastcode, code;
-  CArcEntry *tmp, *tmp1;
-
-  dst_ptr = c->dst_buf + c->dst_pos;
-  dst_limit = c->dst_buf + c->dst_size;
-
-  while (dst_ptr < dst_limit && c->stk_ptr != c->stk_base)
-    *dst_ptr++ = *--c->stk_ptr;
-
-  if (c->stk_ptr == c->stk_base && dst_ptr < dst_limit)
-  {
-    if (c->saved_basecode == 0xFFFFFFFFl)
-    {
-      lastcode = BFieldExtDWORD(c->src_buf, c->src_pos,
-                                c->next_bits_in_use);
-      c->src_pos = c->src_pos + c->next_bits_in_use;
-      *dst_ptr++ = lastcode;
-      ArcEntryGet(c);
-      c->last_ch = lastcode;
-    }
-    else
-      lastcode = c->saved_basecode;
-    while (dst_ptr < dst_limit && c->src_pos + c->next_bits_in_use <= c->src_size)
-    {
-      basecode = BFieldExtDWORD(c->src_buf, c->src_pos,
-                                c->next_bits_in_use);
-      c->src_pos = c->src_pos + c->next_bits_in_use;
-      if (c->cur_entry == &c->compress[basecode])
-      {
-        *c->stk_ptr++ = c->last_ch;
-        code = lastcode;
-      }
-      else
-        code = basecode;
-      while (code >= c->min_table_entry)
-      {
-        *c->stk_ptr++ = c->compress[code].ch;
-        code = c->compress[code].basecode;
-      }
-      *c->stk_ptr++ = code;
-      c->last_ch = code;
-
-      c->entry_used = TRUE;
-      tmp = c->cur_entry;
-      tmp->basecode = lastcode;
-      tmp->ch = c->last_ch;
-      tmp1 = (CArcEntry *)&c->hash[lastcode];
-      tmp->next = tmp1->next;
-      tmp1->next = tmp;
-
-      ArcEntryGet(c);
-      while (dst_ptr < dst_limit && c->stk_ptr != c->stk_base)
-        *dst_ptr++ = *--c->stk_ptr;
-      lastcode = basecode;
-    }
-    c->saved_basecode = lastcode;
-  }
-  c->dst_pos = dst_ptr - c->dst_buf;
-}
-
-CArcCtrl *ArcCtrlNew(DWORD expand, DWORD compression_type)
-{
-  CArcCtrl *c;
-  c = (CArcCtrl *)CAlloc(sizeof(CArcCtrl));
-  if (expand)
-  {
-    c->stk_base = (BYTE *)malloc(1 << ARC_MAX_BITS);
-    c->stk_ptr = c->stk_base;
-  }
-  if (compression_type == CT_7_BIT)
-    c->min_bits = 7;
-  else
-    c->min_bits = 8;
-  c->min_table_entry = 1 << c->min_bits;
-  c->free_idx = c->min_table_entry;
-  c->next_bits_in_use = c->min_bits + 1;
-  c->free_limit = 1 << c->next_bits_in_use;
-  c->saved_basecode = 0xFFFFFFFFl;
-  c->entry_used = TRUE;
-  ArcEntryGet(c);
-  c->entry_used = TRUE;
-  return c;
-}
-
-void ArcCtrlDel(CArcCtrl *c)
-{
-  Free(c->stk_base);
-  Free(c);
-}
-
-BYTE *ExpandBuf(CArcCompress *arc)
-{
-  CArcCtrl *c;
-  BYTE *res;
-
-  if (!(CT_NONE <= arc->compression_type && arc->compression_type <= CT_8_BIT) ||
-      arc->expanded_size >= 0x20000000l)
-    return NULL;
-
-  res = (BYTE *)malloc(arc->expanded_size + 1);
-  res[arc->expanded_size] = 0; //terminate
-  switch (arc->compression_type)
-  {
-  case CT_NONE:
-    memcpy(res, arc->body, arc->expanded_size);
-    break;
-  case CT_7_BIT:
-  case CT_8_BIT:
-    c = ArcCtrlNew(TRUE, arc->compression_type);
-    c->src_size = arc->compressed_size * 8;
-    c->src_pos = (sizeof(CArcCompress) - 1) * 8;
-    c->src_buf = (BYTE *)arc;
-    c->dst_size = arc->expanded_size;
-    c->dst_buf = res;
-    c->dst_pos = 0;
-    ArcExpandBuf(c);
-    ArcCtrlDel(c);
-    break;
-  }
-  return res;
-}
-
-BOOL Cvt(char *in_name, char *out_name, BOOL cvt_ascii)
-{
-  DWORD out_size, i, j, in_size;
+  uint32_t out_size, i, j, in_size;
   CArcCompress *arc;
-  BYTE *out_buf;
+  uint8_t *out_buf;
   FILE *io_file;
-  BOOL okay = FALSE;
+  bool okay = false;
   if (io_file = fopen(in_name, "rb"))
   {
     in_size = FSize(io_file);
     arc = (CArcCompress *)malloc(in_size);
     fread(arc, 1, in_size, io_file);
     out_size = arc->expanded_size;
-    printf("%-45s %d-->%d\r\n", in_name, (DWORD)in_size, out_size);
+    printf("%-45s %d-->%d\r\n", in_name, (uint32_t)in_size, out_size);
     fclose(io_file);
     if (arc->compressed_size == in_size &&
         arc->compression_type && arc->compression_type <= 3)
     {
-      if (out_buf = ExpandBuf(arc))
+      if (out_buf = arc->ExpandBuf())
       {
         if (cvt_ascii)
         {
@@ -340,7 +94,7 @@ BOOL Cvt(char *in_name, char *out_name, BOOL cvt_ascii)
         {
           fwrite(out_buf, 1, out_size, io_file);
           fclose(io_file);
-          okay = TRUE;
+          okay = true;
         }
         Free(out_buf);
       }
@@ -381,7 +135,7 @@ CSndWaveCtrl *SndWaveCtrlNew(int sample_rate = 8000)
   return swc;
 }
 
-void SndWaveAddBuf(CSndWaveCtrl *swc, BYTE *buf, int num_samples,
+void SndWaveAddBuf(CSndWaveCtrl *swc, uint8_t *buf, int num_samples,
                    double _freq, double _amp = 1.0)
 {
   int i, j, k;
@@ -424,12 +178,12 @@ void SndWaveAddBuf(CSndWaveCtrl *swc, BYTE *buf, int num_samples,
 class CFileSND
 {
 public:
-  DWORD signature; //0x646e732e
-  DWORD offset;    //24
-  DWORD data_size;
-  DWORD coding;      //3=16bit uncompressed
-  DWORD sample_rate; //Hz
-  DWORD channels;    //1=mono
+  uint32_t signature; //0x646e732e
+  uint32_t offset;    //24
+  uint32_t data_size;
+  uint32_t coding;      //3=16bit uncompressed
+  uint32_t sample_rate; //Hz
+  uint32_t channels;    //1=mono
   short body[1];
 };
 
@@ -464,7 +218,7 @@ int SndFileCreate(char *print_fmt, double normalized_vol = 1.0,
     //    d=snd.record_head.next;
     d->time -= time_shift;
     //    while (d->next!=&snd.record_head) {
-    while (TRUE)
+    while (true)
     {
       //      d1=d->next;
       dt = d1->time - d->time;
@@ -486,7 +240,7 @@ int SndFileCreate(char *print_fmt, double normalized_vol = 1.0,
   i1 = d1->time * SNDFILE_SAMPLE_RATE;
   if (i1 - i)
   {
-    SndWaveAddBuf(swc, (BYTE *)&s->body[k], i1 - i,
+    SndWaveAddBuf(swc, (uint8_t *)&s->body[k], i1 - i,
                   Ona2Freq(d->ona), normalized_vol);
     k += i1 - i;
     i = i1;
@@ -501,7 +255,7 @@ int SndFileCreate(char *print_fmt, double normalized_vol = 1.0,
   {
     if (dt = reverb_delay * SNDFILE_SAMPLE_RATE)
       for (i = dt; i < cnt; i++)
-        s->body[i] += reverb_intensity * s->body[i - (DWORD)dt];
+        s->body[i] += reverb_intensity * s->body[i - (uint32_t)dt];
   }
 
   //Get rid of D.C. component
@@ -513,10 +267,10 @@ int SndFileCreate(char *print_fmt, double normalized_vol = 1.0,
     level /= cnt - 1;
     for (i = 0; i < cnt - 1; i++)
     {
-      if (s->body[i] - level <= SHORT_MIN)
-        s->body[i] = SHORT_MIN;
-      else if (s->body[i] - level >= SHORT_MIN)
-        s->body[i] = SHORT_MAX;
+      if (s->body[i] - level <= INT16_MIN)
+        s->body[i] = INT16_MIN;
+      else if (s->body[i] - level >= INT16_MIN)
+        s->body[i] = INT16_MAX;
       else
         s->body[i] = s->body[i] - level;
     }
@@ -564,13 +318,13 @@ int SndFileCreate(char *print_fmt, double normalized_vol = 1.0,
 class CBGR24
 {
 public:
-  BYTE b, g, r, pad;
+  uint8_t b, g, r, pad;
 };
 
 class CBGR48
 {
 public:
-  WORD b, g, r, pad;
+  uint16_t b, g, r, pad;
 } gr_palette_std[COLORS_NUM] = {
     {0x0000, 0x0000, 0x0000, 0}, {0xAAAA, 0x0000, 0x0000, 0}, {0x0000, 0xAAAA, 0x0000, 0}, {0xAAAA, 0xAAAA, 0x0000, 0}, {0x0000, 0x0000, 0xAAAA, 0}, {0xAAAA, 0x0000, 0xAAAA, 0}, {0x0000, 0x5555, 0xAAAA, 0}, {0xAAAA, 0xAAAA, 0xAAAA, 0}, {0x5555, 0x5555, 0x5555, 0}, {0xFFFF, 0x5555, 0x5555, 0}, {0x5555, 0xFFFF, 0x5555, 0}, {0xFFFF, 0xFFFF, 0x5555, 0}, {0x5555, 0x5555, 0xFFFF, 0}, {0xFFFF, 0x5555, 0xFFFF, 0}, {0x5555, 0xFFFF, 0xFFFF, 0}, {0xFFFF, 0xFFFF, 0xFFFF, 0}};
 
@@ -586,16 +340,16 @@ public:
       height,
       flags;
   CBGR48 palette[COLORS_NUM];
-  BYTE *body;
+  uint8_t *body;
 };
 
-CDC *DCNew(DWORD width, DWORD height)
+CDC *DCNew(uint32_t width, uint32_t height)
 {
   CDC *res = (CDC *)CAlloc(sizeof(CDC));
   res->width = width;
   res->width_internal = (width + 7) & ~7;
   res->height = height;
-  res->body = (BYTE *)CAlloc(res->width_internal * res->height);
+  res->body = (uint8_t *)CAlloc(res->width_internal * res->height);
   return res;
 }
 
@@ -607,14 +361,14 @@ void DCDel(CDC *dc)
   Free(dc);
 }
 
-CDC *DCLoad(BYTE *src, DWORD *_size)
+CDC *DCLoad(uint8_t *src, uint32_t *_size)
 { //Loads device context from mem.
-  BYTE *ptr = src;
+  uint8_t *ptr = src;
   CArcCompress *arc;
-  DWORD body_size;
+  uint32_t body_size;
   CDC *res = (CDC *)CAlloc(sizeof(CDC));
-  memcpy(res, ptr, sizeof(CDC) - sizeof(BYTE *) - COLORS_NUM * sizeof(CBGR48));
-  ptr += sizeof(CDC) - sizeof(BYTE *) - COLORS_NUM * sizeof(CBGR48);
+  memcpy(res, ptr, sizeof(CDC) - sizeof(uint8_t *) - COLORS_NUM * sizeof(CBGR48));
+  ptr += sizeof(CDC) - sizeof(uint8_t *) - COLORS_NUM * sizeof(CBGR48);
   if (res->flags & DCF_PALETTE)
   {
     memcpy(&res->palette, ptr, COLORS_NUM * sizeof(CBGR48));
@@ -628,12 +382,12 @@ CDC *DCLoad(BYTE *src, DWORD *_size)
   {
     res->flags &= ~DCF_COMPRESSED;
     arc = (CArcCompress *)ptr;
-    res->body = ExpandBuf(arc);
+    res->body = arc->ExpandBuf();
     ptr += arc->compressed_size;
   }
   else
   {
-    res->body = (BYTE *)malloc(body_size);
+    res->body = (uint8_t *)malloc(body_size);
     memcpy(res->body, ptr, body_size);
     ptr += body_size;
   }
@@ -641,7 +395,7 @@ CDC *DCLoad(BYTE *src, DWORD *_size)
   return res;
 }
 
-BOOL GrBlot(CDC *dc, int x, int y, CDC *img)
+bool GrBlot(CDC *dc, int x, int y, CDC *img)
 {
   int j, k, k1, w1, h1, w2, h2;
   if (x < 0)
@@ -668,10 +422,10 @@ BOOL GrBlot(CDC *dc, int x, int y, CDC *img)
       k += img->width_internal;
       k1 += dc->width_internal;
     }
-    return TRUE;
+    return true;
   }
   else
-    return FALSE;
+    return false;
 }
 
 #define BMP_COLORS_NUM 16
@@ -679,29 +433,29 @@ BOOL GrBlot(CDC *dc, int x, int y, CDC *img)
 class CFileBMP
 {
 public:
-  WORD type;
-  DWORD file_size;
-  DWORD reserved;
-  DWORD data_offset;
+  uint16_t type;
+  uint32_t file_size;
+  uint32_t reserved;
+  uint32_t data_offset;
 
-  DWORD header_size;
-  DWORD width;
-  DWORD height;
-  WORD planes;
-  WORD bit_cnt;
-  DWORD compression;
-  DWORD image_size;
-  DWORD x_pixs_per_meter;
-  DWORD y_pixs_per_meter;
-  DWORD colors_used;
-  DWORD important_colors;
+  uint32_t header_size;
+  uint32_t width;
+  uint32_t height;
+  uint16_t planes;
+  uint16_t bit_cnt;
+  uint32_t compression;
+  uint32_t image_size;
+  uint32_t x_pixs_per_meter;
+  uint32_t y_pixs_per_meter;
+  uint32_t colors_used;
+  uint32_t important_colors;
 
   CBGR24 palette[BMP_COLORS_NUM];
 };
 
 CFileBMP *BMPRLE4To(CDC *dc)
 { //To Windows RLE4 bit BMP.
-  BYTE *src, *ptr, *start;
+  uint8_t *src, *ptr, *start;
   int i, x, y, w = dc->width, cnt, pattern;
   CBGR48 palette[COLORS_NUM];
   CFileBMP *bmp = (CFileBMP *)CAlloc(sizeof(CFileBMP) +
@@ -722,7 +476,7 @@ CFileBMP *BMPRLE4To(CDC *dc)
     bmp->palette[i].r = palette[i].r >> 8;
     bmp->palette[i].pad = 0;
   }
-  start = ptr = (BYTE *)bmp + bmp->data_offset;
+  start = ptr = (uint8_t *)bmp + bmp->data_offset;
   for (y = dc->height - 1; y >= 0; y--)
   {
     src = y * dc->width_internal + dc->body;
@@ -735,7 +489,7 @@ CFileBMP *BMPRLE4To(CDC *dc)
         src += 2;
         cnt = 2;
         x += 2;
-        while ((x < w) && (cnt < BYTE_MAX))
+        while ((x < w) && (cnt < UINT8_MAX))
         {
           if ((*src & 15) == (pattern & 15))
           {
@@ -782,12 +536,12 @@ void BMPWrite(char *filename, CDC *dc)
 int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
               char *mp4_print_fmt, char *out_name, double fps = 30000.0 / 1001)
 { //Cvt GR list MV file to BMP lst
-  DWORD bmp_num, size;
-  BOOL cont = TRUE;
+  uint32_t bmp_num, size;
+  bool cont = true;
   int num = 0, remaining, mv_percent_cnt, bmp_percent_cnt, dir_percent_cnt,
       mp4_percent_cnt;
   CDC *dc, *base;
-  BYTE *src, *src_base;
+  uint8_t *src, *src_base;
   char st[512], st_dir[512], st_bmp[512], st_mp4[512];
   CDate cdt;
   FILE *mv_file, *lst_file = fopen("TOSZTEMP_VID_LIST.TXT", "wt");
@@ -827,7 +581,7 @@ int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
       bmp_num = 0;
 
       remaining = FSize(mv_file);
-      src = src_base = (BYTE *)malloc(remaining + 1);
+      src = src_base = (uint8_t *)malloc(remaining + 1);
       fread(src_base, 1, remaining, mv_file);
       src_base[remaining] = 0;
       base = DCNew(GR_WIDTH, GR_HEIGHT);
@@ -836,7 +590,7 @@ int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
         dc = DCLoad(src, &size);
         if (!size)
         {
-          cont = FALSE;
+          cont = false;
           break;
         }
         GrBlot(base, dc->x0, dc->y0, dc);
@@ -854,12 +608,12 @@ int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
             strcpy(st_bmp, bmp_print_fmt);
           sprintf(st, "%s/%s", st_dir, st_bmp);
           BMPWrite(st, base);
-          if (cdt.time >= DWORD_MAX - (DWORD)(CDATE_FREQ / fps) + 1)
+          if (cdt.time >= UINT32_MAX - (uint32_t)(CDATE_FREQ / fps) + 1)
             cdt.date++;
-          cdt.time += (DWORD)(CDATE_FREQ / fps);
+          cdt.time += (uint32_t)(CDATE_FREQ / fps);
           if (!bmp_percent_cnt)
           {
-            cont = FALSE;
+            cont = false;
             break;
           }
           bmp_num++;
@@ -922,7 +676,7 @@ int SND2MP4Lst(char *snd_print_fmt, char *mp4_print_fmt, char *out_name,
   else
     mp4_percent_cnt = 0;
 
-  while (TRUE)
+  while (true)
   {
     if (snd_percent_cnt)
       sprintf(st_snd, snd_print_fmt, num);
@@ -964,7 +718,7 @@ int main(int argc, char *argv[])
 {
   char *in_name, *out_name, st[256],
       *mv_print_fmt, *snd_print_fmt;
-  BOOL cvt_ascii, del_in = FALSE;
+  bool cvt_ascii, del_in = false;
   int i = 1, l;
   if (argc > i && !strcmp(argv[i], "-bmp"))
   {
@@ -1022,11 +776,11 @@ int main(int argc, char *argv[])
   {
     if (argc > i && !strcmp(argv[i], "-ascii"))
     {
-      cvt_ascii = TRUE;
+      cvt_ascii = true;
       i++;
     }
     else
-      cvt_ascii = FALSE;
+      cvt_ascii = false;
     if (argc > i)
     {
       in_name = argv[i++];
@@ -1039,7 +793,7 @@ int main(int argc, char *argv[])
         if (l > 2 && st[l - 1] == 'Z' && st[l - 2] == '.')
         {
           st[l - 2] = 0;
-          del_in = TRUE;
+          del_in = true;
         }
         out_name = st;
       }
@@ -1052,7 +806,7 @@ int main(int argc, char *argv[])
         if (l > 2 && st[l - 1] == 'Z' && st[l - 2] == '.')
         {
           st[l - 2] = 0;
-          del_in = TRUE;
+          del_in = true;
         }
         out_name = st;
       }
@@ -1074,13 +828,13 @@ int main(int argc, char *argv[])
            "The -ascii flag will convert "
            "nonstandard TempleOS ASCII "
            "characters to regular ASCII.\r\n\r\n");
-      puts("TOSZ -bmp VID%03d.MV VIDEO.MP4\r\n"
+      puts("TOSZ -bmp VIDEO.MV VIDEO.MP4\r\n"
            "TOSZ will expand MV files to a sequence of BMP files and, "
            "will call ffmpeg to convert BMP files to an MP4 file.\r\n\r\n");
-      puts("TOSZ -snd AUD%03d.SND AUDIO.MP4\r\n\r\n"
+      puts("TOSZ -snd AUDIO.SND AUDIO.MP4\r\n\r\n"
            "TOSZ will call ffmpeg to convert SND files "
            "to an MP4 file.\r\n");
-      puts("TOSZ -mp4 VID%03d.MV AUD%03d.SND MOVIE.MP4\r\n\r\n"
+      puts("TOSZ -mp4 VIDEO.MV AUDIO.SND MOVIE.MP4\r\n\r\n"
            "TOSZ will call ffmpeg to convert MV files and SND files "
            "to a combined MP4 file.\r\n");
     }
