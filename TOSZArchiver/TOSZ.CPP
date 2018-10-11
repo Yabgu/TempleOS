@@ -11,7 +11,7 @@ class CDate
 {
 public:
   uint32_t time;
-  int date;
+  int32_t date;
 };
 
 uint16_t EndianWORD(uint16_t d)
@@ -104,21 +104,21 @@ bool Cvt(char *in_name, char *out_name, bool cvt_ascii)
   return okay;
 }
 
-#define ONA_REST CHAR_MIN
+#define ONA_REST INT8_MIN
 
 double Ona2Freq(char ona)
 { //Ona to freq. Ona=60 is 440.0Hz.
   if (ona == ONA_REST)
     return 0;
-  //  else
-  //    return 440.0/32*pow(2.0,ona/12.0);
+  else
+    return 440.0/32*pow(2.0,ona/12.0);
 }
 
 class CSndData
 {
 public:
   double time;
-  char ona;
+  int8_t ona;
 };
 
 class CSndWaveCtrl
@@ -148,10 +148,10 @@ void SndWaveAddBuf(CSndWaveCtrl *swc, uint8_t *buf, int num_samples,
   {
     phase = swc->phase;
     i = 0;
-    if (INT_MAX < INT_MAX * _amp)
-      amp = INT_MAX;
+    if (INT32_MAX < INT32_MAX * _amp)
+      amp = INT32_MAX;
     else
-      amp = INT_MAX * _amp;
+      amp = INT32_MAX * _amp;
     f = 2.0 / swc->sample_rate * _freq;
     while (phase < 0)
       phase += 2;
@@ -546,7 +546,7 @@ int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
   CDate cdt;
   FILE *mv_file, *lst_file = fopen("TOSZTEMP_VID_LIST.TXT", "wt");
   cdt.time = 0;
-  cdt.date = INT_MIN;
+  cdt.date = INT32_MIN;
 
   if (mv_print_fmt)
     mv_percent_cnt = StrOcc(mv_print_fmt, '%');
@@ -594,7 +594,7 @@ int MV2BMPLst(char *mv_print_fmt, char *dir_print_fmt, char *bmp_print_fmt,
           break;
         }
         GrBlot(base, dc->x0, dc->y0, dc);
-        if (cdt.time == 0 && cdt.date == INT_MIN)
+        if (cdt.time == 0 && cdt.date == INT32_MIN)
         {
           cdt.time = dc->cdt.time;
           cdt.date = dc->cdt.date;
