@@ -9,11 +9,11 @@ echo "Checking if output directory exist"
 
 if [ ! -d "$OUTPUT_DIR" ]; then
   echo "Creating output dir"
-  mkdir "$DIR/build" || die "Cannot create output dir"
+  mkdir "$DIR/build"
 fi
 
 echo "Make TOSZ"
-pushd "$OUTPUT_DIR" || die "Cannot enter into output dir"
+pushd "$OUTPUT_DIR"
 cmake "$DIR"
 cmake --build .
 popd
